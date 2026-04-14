@@ -1,0 +1,75 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+**/__pycache__/
+*.py[cod]
+**/*.py[cod]
+*.pyd
+*$py.class
+*.so
+.Python
+
+# Build / packaging
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# =========================
+# Virtual environments
+# =========================
+
+# pycourse_env/
+
+# =========================
+# Testing / coverage
+# =========================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# =========================
+# Notebooks
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# IDE / Editor / OS
+# =========================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+nohup.out
+
+# =========================
+# Neuroimaging / scientific data
+# =========================
+Data*/
+trash/
+
+*.nii
+*.nii.gz
+*.mgz
+*.bval
+*.bvec
+*.mat
