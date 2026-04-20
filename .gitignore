@@ -66,11 +66,11 @@ nohup.out
 # =========================
 # Neuroimaging / scientific data
 # =========================
-Data*/
-data*/
-Results*/
-results*/
-
+# Data*/
+# data*/
+# Results*/
+# results*/
+temp*/
 
 trash/
 
