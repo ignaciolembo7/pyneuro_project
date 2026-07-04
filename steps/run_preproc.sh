@@ -1,20 +1,17 @@
 #!/bin/bash
 # run_preproc.sh
 # ==============
-# Preprocessing-stage dispatcher using the same cohort + token style as the
-# larger pipeline.
+# Preprocessing-stage dispatcher for brain acquisitions.
 #
 # Usage:
-#   run_preproc.sh <cohort> <step> [<step> ...] [--subjects s1,s2,...]
+#   run_preproc.sh <step> [<step> ...] [--subjects s1,s2,...]
 #
-#   cohort : brains | phantoms
 #   step   : den_gr | topup | eddy | bias   (any order; steps run in the
 #            canonical scientific order den_gr -> topup -> eddy -> bias)
 #
 # Examples:
-#   ./run_preproc.sh brains den_gr topup eddy bias
-#   ./run_preproc.sh phantoms den_gr eddy bias         # topup is skipped
-#   ./run_preproc.sh brains eddy --subjects c01,c02
+#   ./run_preproc.sh den_gr topup eddy bias
+#   ./run_preproc.sh eddy --subjects c01,c02
 #
 # Without --subjects, all subject directories under BASEPATH are processed.
 set -e
@@ -23,11 +20,12 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=preproc_config.sh
 source "${here}/preproc_config.sh"
 
-cohort="${1:?usage: run_preproc.sh <brains|phantoms> <steps...>}"; shift
-case "${cohort}" in
-  brains|phantoms) ;;
-  *) echo "Invalid cohort: '${cohort}' (use brains or phantoms)"; exit 1;;
-esac
+[ $# -gt 0 ] || { echo "usage: run_preproc.sh <steps...> [--subjects s1,s2,...]"; exit 1; }
+
+# Backward-compatible no-op for old commands that started with "brains".
+if [ "${1}" = "brains" ]; then
+  shift
+fi
 
 # --- split steps from --subjects ---
 declare -A want
@@ -40,12 +38,6 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ ${#want[@]} -gt 0 ] || { echo "No steps were provided"; exit 1; }
-
-if [ "${cohort}" = "phantoms" ] && { [ -n "${want[eddy]:-}" ] || [ -n "${want[bias]:-}" ]; }; then
-  echo "The current eddy/bias steps require topup-derived acqparams and masks." >&2
-  echo "For phantoms, only den_gr is currently runnable in this repository layout." >&2
-  exit 1
-fi
 
 # --- subject list ---
 if [ -n "${subjects_csv}" ]; then
@@ -64,19 +56,14 @@ fi
 
 # --- execution: canonical scientific order ---
 order=(den_gr topup eddy bias)
-export COHORT="${cohort}"
 
-echo "cohort=${cohort} | steps=${!want[*]} | subjects=${#subjects[@]}"
+echo "dataset=brains | steps=${!want[*]} | subjects=${#subjects[@]}"
 for sub in "${subjects[@]}"; do
   require_subject_layout "${sub}"
   echo "======================================================"
-  echo "=== ${cohort} :: ${sub} ==="
+  echo "=== brains :: ${sub} ==="
   for step in "${order[@]}"; do
     [ -n "${want[$step]:-}" ] || continue
-    if [ "${step}" = "topup" ] && [ "${cohort}" = "phantoms" ]; then
-      echo "topup: skipped for phantoms (2D, no reverse phase-encoding pair) - ${sub}"
-      continue
-    fi
     bash "${here}/step_${step}.sh" "${sub}"
   done
 done

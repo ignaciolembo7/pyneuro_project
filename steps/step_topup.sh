@@ -11,12 +11,6 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=preproc_config.sh
 source "${here}/preproc_config.sh"
 
-# Guard against direct phantom calls; the dispatcher already skips this step.
-if [ "${COHORT:-brains}" = "phantoms" ]; then
-  echo "topup: skipped for phantoms (2D, no reverse phase-encoding pair) - ${sub}"
-  exit 0
-fi
-
 load_fsl
 
 dwidir="${BASEPATH}/${sub}/${SESSION}/dwi"

@@ -107,28 +107,22 @@ FSL >= 6.0.3, MRtrix3 >= 3.0.2, and ANTs.
 Run from the repository root:
 
 ```bash
-./steps/run_preproc.sh brains den_gr topup eddy bias
-./steps/run_preproc.sh brains eddy --subjects c01,c02
+./steps/run_preproc.sh den_gr topup eddy bias
+./steps/run_preproc.sh eddy --subjects c01,c02
 ```
 
 Or point the pipeline to another data root:
 
 ```bash
 export BASEPATH=/path/to/data
-./steps/run_preproc.sh brains den_gr topup eddy bias
+./steps/run_preproc.sh den_gr topup eddy bias
 ```
 
 Steps are always executed in the canonical order `den_gr -> topup -> eddy ->
 bias`, regardless of the order passed on the command line.
 
-Current cohort support:
-
-- `brains`: full chain (`den_gr`, `topup`, `eddy`, `bias`) when all expected
-  inputs are present.
-- `phantoms`: `den_gr` only in this repository state. The current `eddy` and
-  `bias` steps depend on topup-derived acqparams and masks, so phantom
-  `eddy`/`bias` is blocked with an explicit error until a phantom-specific path
-  is implemented.
+The preprocessing path is brain-only and supports the full chain (`den_gr`,
+`topup`, `eddy`, `bias`) when all expected inputs are present.
 
 ## QC Usage
 

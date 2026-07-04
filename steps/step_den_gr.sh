@@ -3,7 +3,6 @@
 # ==============
 # Denoising (MP-PCA) + Gibbs ringing correction with MRtrix.
 # Faithful to 1_denoising_gibbs-ringing.sh (same commands and flags).
-# Valid for brains and phantoms.
 set -e
 
 sub="${1:?usage: step_den_gr.sh <sub>}"
