@@ -174,9 +174,16 @@ def qc_json_to_series(qc: dict) -> pd.Series:
 # 3. IMAGE-BASED METRICS (denoising) - require nibabel
 # ===========================================================================
 def _require_nibabel():
+    global nib
     if nib is None:
-        raise ImportError("nibabel is required for image-based metrics "
-                          "(install with `pip install nibabel`).")
+        try:
+            import nibabel as nib
+        except ImportError as exc:
+            raise ImportError(
+                "nibabel is required for image-based metrics "
+                "(install with `conda install -c conda-forge nibabel` "
+                "or `pip install nibabel`, then restart the notebook kernel)."
+            ) from exc
 
 
 def _read_mask(mask_path, reference_shape):

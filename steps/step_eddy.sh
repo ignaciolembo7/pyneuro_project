@@ -7,6 +7,7 @@
 #   - the index is derived from the number of volumes (previously hardcoded as 181),
 #   - slspec is generated with make_slspec.py (port of slspec_writer.m).
 set -e
+set -o pipefail
 
 sub="${1:?usage: step_eddy.sh <sub>}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,9 +68,11 @@ myslspec="${dendir}/preproc-2/eddy-in/${sub}_my_slspec.txt"
 python "${PREPROC_SCRIPTS_DIR}/make_slspec.py" --json "${myjson}" --out "${myslspec}"
 
 # ---------------- original commands (unchanged) ----------------
+eddy_log="${myout}.eddy_stdout_stderr.log"
 "${EDDY_CMD}" --imain=${myimain} --mask=${mymask} --acqp=${myacqp} --index=${findex} \
   --bvecs=${mybvecs} --bvals=${mybvals} --topup=${mytopup} --out=${myout} \
-  --repol --ol_type=both --slspec=${myslspec} --cnr_maps --residuals ${EDDY_EXTRA_ARGS:-}
+  --repol --ol_type=both --slspec=${myslspec} --cnr_maps --residuals ${EDDY_EXTRA_ARGS:-} \
+  2>&1 | tee "${eddy_log}"
 
 cd "${dendir}/preproc-2/eddy-out"
 eddy_quad ${myout} -idx ${findex} -par ${myacqp} -m ${mymask} -b ${mybvals} -s ${myslspec}

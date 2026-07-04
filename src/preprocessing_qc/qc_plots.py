@@ -27,8 +27,16 @@ except ImportError:
 
 
 def _require_nibabel():
+    global nib
     if nib is None:
-        raise ImportError("nibabel is required to plot NIfTI slices.")
+        try:
+            import nibabel as nib
+        except ImportError as exc:
+            raise ImportError(
+                "nibabel is required to plot NIfTI slices "
+                "(install with `conda install -c conda-forge nibabel` "
+                "or `pip install nibabel`, then restart the notebook kernel)."
+            ) from exc
 
 
 def _load_volume(path, volume: int = 0):
