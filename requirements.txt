@@ -1,0 +1,10 @@
+# Python dependencies for the preprocessing stage and QC.
+# External tools (FSL, MRtrix3, ANTs) are installed separately.
+numpy>=1.23
+pandas>=1.5
+matplotlib>=3.6
+nibabel>=4.0
+
+# Optional dependencies (notebook and tests)
+jupyter
+pytest>=7.0

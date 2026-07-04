@@ -1,0 +1,318 @@
+"""
+qc_metrics.py
+=============
+
+Extract quality-control (QC) metrics from dMRI preprocessing outputs.
+
+This module does NOT run or modify any external tool (FSL / MRtrix / ANTs): it
+only READS files already written by the preprocessing steps (``dwidenoise`` noise
+map, ``eddy`` outputs, and ``eddy_quad`` outputs) and converts them into
+``pandas`` objects ready for tables, comparisons, and plots.
+
+All functions return ``pandas.DataFrame`` or ``pandas.Series`` so analysis and
+visualization can stay in Python.
+
+Dependencies: numpy, pandas. ``nibabel`` is optional and only required for
+metrics that read images (denoising SNR, residual statistics).
+"""
+
+from __future__ import annotations
+
+import json
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+try:
+    import nibabel as nib
+except ImportError:  # nibabel is optional; it is only needed for image metrics
+    nib = None
+
+
+# ---------------------------------------------------------------------------
+# FIXED suffixes that FSL eddy / eddy_quad append to the output basename. These
+# suffixes are set by FSL and do not change when the pipeline is reorganized; the
+# only setup-specific value is the base path passed as an argument.
+# ---------------------------------------------------------------------------
+EDDY_SUFFIX = {
+    "movement_rms": ".eddy_movement_rms",
+    "restricted_movement_rms": ".eddy_restricted_movement_rms",
+    "parameters": ".eddy_parameters",
+    "outlier_map": ".eddy_outlier_map",
+    "outlier_report": ".eddy_outlier_report",
+    "rotated_bvecs": ".eddy_rotated_bvecs",
+    "qc_json": ".qc/qc.json",
+}
+
+
+def _eddy_path(eddy_base: str | Path, key: str) -> Path:
+    """Build the path to an eddy file from the basename and a suffix key."""
+    return Path(f"{eddy_base}{EDDY_SUFFIX[key]}")
+
+
+def _safe(func, *args, **kwargs):
+    """Run ``func`` and return ``None`` instead of stopping the QC report.
+
+    Missing files and read failures are reported as warnings.
+    """
+    try:
+        return func(*args, **kwargs)
+    except FileNotFoundError:
+        warnings.warn(f"[qc_metrics] file not found for {func.__name__}", stacklevel=2)
+        return None
+    except Exception as exc:  # noqa: BLE001 - QC should not fail for one subject
+        warnings.warn(f"[qc_metrics] {func.__name__} failed: {exc}", stacklevel=2)
+        return None
+
+
+# ===========================================================================
+# 1. EDDY FILE READERS (motion, parameters, outliers)
+# ===========================================================================
+def load_movement_rms(path: str | Path) -> pd.DataFrame:
+    """Read ``<base>.eddy_movement_rms``.
+
+    Returns a volume-indexed ``DataFrame`` with two columns:
+
+    - ``abs_mm``: RMS displacement relative to the first volume.
+    - ``rel_mm``: RMS displacement relative to the previous volume.
+    """
+    data = np.loadtxt(path)
+    data = np.atleast_2d(data)
+    df = pd.DataFrame(data[:, :2], columns=["abs_mm", "rel_mm"])
+    df.index.name = "volume"
+    return df
+
+
+def load_motion_parameters(path: str | Path) -> pd.DataFrame:
+    """Read ``<base>.eddy_parameters``.
+
+    The first 6 columns are rigid-body motion: 3 translations (mm) and 3
+    rotations (rad). Remaining eddy-current terms are ignored here.
+    """
+    data = np.atleast_2d(np.loadtxt(path))
+    cols = ["trans_x_mm", "trans_y_mm", "trans_z_mm",
+            "rot_x_rad", "rot_y_rad", "rot_z_rad"]
+    df = pd.DataFrame(data[:, :6], columns=cols)
+    df.index.name = "volume"
+    return df
+
+
+def load_outlier_map(path: str | Path) -> pd.DataFrame:
+    """Read ``<base>.eddy_outlier_map``.
+
+    This is a binary matrix (volumes x slices), where 1 marks a slice detected
+    as an outlier by ``--repol``. A text header line is skipped when present.
+    """
+    try:
+        data = np.loadtxt(path, skiprows=1)
+    except ValueError:
+        # Some versions may not write a header.
+        data = np.loadtxt(path)
+    data = np.atleast_2d(data).astype(int)
+    df = pd.DataFrame(data)
+    df.index.name = "volume"
+    df.columns.name = "slice"
+    return df
+
+
+def summarize_outliers(outlier_map: pd.DataFrame) -> pd.Series:
+    """Summarize the outlier matrix into a few interpretable numbers."""
+    total = int(outlier_map.values.sum())
+    n_cells = int(outlier_map.size)
+    per_volume = outlier_map.sum(axis=1)
+    return pd.Series({
+        "outlier_slices_total": total,
+        "outlier_slices_pct": 100.0 * total / n_cells if n_cells else np.nan,
+        "volumes_with_outliers": int((per_volume > 0).sum()),
+        "max_outliers_in_a_volume": int(per_volume.max()) if len(per_volume) else 0,
+    })
+
+
+# ===========================================================================
+# 2. EDDY_QUAD JSON REPORT READER
+# ===========================================================================
+def load_qc_json(path: str | Path) -> dict:
+    """Read the ``qc.json`` generated by ``eddy_quad``.
+
+    It contains summary metrics such as mean motion, outlier percentage, and
+    CNR/SNR by shell.
+    """
+    with open(path) as fh:
+        return json.load(fh)
+
+
+def qc_json_to_series(qc: dict) -> pd.Series:
+    """Extract commonly used metrics from ``qc.json`` as a flat ``Series``.
+
+    Missing keys are tolerated and become ``NaN``. ``qc_cnr_avg`` and
+    ``qc_snr_avg`` are lists (one value per shell); the global average and
+    per-shell values are both stored.
+    """
+    out: dict[str, float] = {}
+    out["quad_mot_abs_mm"] = qc.get("qc_mot_abs", np.nan)
+    out["quad_mot_rel_mm"] = qc.get("qc_mot_rel", np.nan)
+    out["quad_outliers_pct"] = qc.get("qc_outliers_tot", np.nan)
+    out["n_shells"] = qc.get("data_no_shells", np.nan)
+    out["n_b0_volumes"] = qc.get("data_no_b0_vols", np.nan)
+    out["n_dw_volumes"] = qc.get("data_no_dw_vols", np.nan)
+
+    cnr = qc.get("qc_cnr_avg")
+    if isinstance(cnr, (list, tuple)) and len(cnr):
+        out["cnr_avg"] = float(np.nanmean(cnr))
+        for i, v in enumerate(cnr):
+            out[f"cnr_shell{i}"] = float(v)
+    snr = qc.get("qc_snr_avg")
+    if isinstance(snr, (list, tuple)) and len(snr):
+        out["snr_b0_quad"] = float(np.nanmean(snr))
+
+    return pd.Series(out)
+
+
+# ===========================================================================
+# 3. IMAGE-BASED METRICS (denoising) - require nibabel
+# ===========================================================================
+def _require_nibabel():
+    if nib is None:
+        raise ImportError("nibabel is required for image-based metrics "
+                          "(install with `pip install nibabel`).")
+
+
+def _read_mask(mask_path, reference_shape):
+    if mask_path is not None:
+        return nib.load(str(mask_path)).get_fdata() > 0
+    return np.ones(reference_shape, dtype=bool)
+
+
+def compute_denoising_snr(dwi_path, noise_path, bval_path,
+                          mask_path=None, b0_thr: float = 50.0) -> pd.Series:
+    """Estimate b=0 SNR using the ``dwidenoise`` noise map (sigma).
+
+    ``SNR = <b0 signal> / <sigma>`` is computed inside the mask as a ratio of
+    means, which is more stable than averaging voxel-wise ratios.
+    """
+    _require_nibabel()
+    dwi = nib.load(str(dwi_path)).get_fdata()
+    sigma = nib.load(str(noise_path)).get_fdata()
+    bvals = np.atleast_1d(np.loadtxt(bval_path))
+
+    b0_idx = np.where(bvals <= b0_thr)[0]
+    if b0_idx.size == 0:
+        raise ValueError("No b=0 volumes were found with the requested threshold.")
+    b0_mean = dwi[..., b0_idx].mean(axis=-1)
+
+    mask = _read_mask(mask_path, sigma.shape) & (sigma > 0)
+    signal = float(b0_mean[mask].mean())
+    noise = float(sigma[mask].mean())
+    return pd.Series({
+        "snr_b0_denoise": signal / noise if noise > 0 else np.nan,
+        "signal_b0_mean": signal,
+        "noise_sigma_mean": noise,
+        "n_b0_volumes": int(b0_idx.size),
+    })
+
+
+def compute_residual_stats(residuals_path, mask_path=None) -> pd.Series:
+    """Compute ``dwidenoise`` residual-map statistics inside the mask.
+
+    Ideally, residuals (input - denoised) should look like noise without
+    anatomical structure; mean near 0 and bounded spread are good signs.
+    """
+    _require_nibabel()
+    res = nib.load(str(residuals_path)).get_fdata()
+    ref_shape = res.shape[:3]
+    mask = _read_mask(mask_path, ref_shape)
+    vals = res[mask]
+    return pd.Series({
+        "residual_mean": float(np.nanmean(vals)),
+        "residual_std": float(np.nanstd(vals)),
+        "residual_abs_mean": float(np.nanmean(np.abs(vals))),
+    })
+
+
+# ===========================================================================
+# 4. SHELL SUMMARY (b-values)
+# ===========================================================================
+def summarize_shells(bval_path, round_to: int = 50) -> pd.DataFrame:
+    """Group b-values into rounded shells and count directions.
+
+    Returns a table with ``b_value`` and ``n_directions`` columns.
+    """
+    bvals = np.atleast_1d(np.loadtxt(bval_path))
+    shells = (np.round(bvals / round_to) * round_to).astype(int)
+    counts = pd.Series(shells).value_counts().sort_index()
+    return counts.rename_axis("b_value").reset_index(name="n_directions")
+
+
+# ===========================================================================
+# 5. SUBJECT AND COHORT SUMMARIES (main tables)
+# ===========================================================================
+def subject_qc_summary(subject_id: str, eddy_base: str | Path, *,
+                       dwi_path=None, noise_path=None, residuals_path=None,
+                       bval_path=None, mask_path=None,
+                       b0_thr: float = 50.0) -> pd.DataFrame:
+    """Build one QC summary row for a subject.
+
+    Combines whatever is available: motion and outliers from ``eddy``, metrics
+    from ``eddy_quad`` (qc.json), and denoising SNR when image paths are passed.
+    Each piece is optional; missing values remain ``NaN``.
+
+    Parameters
+    ----------
+    eddy_base : eddy output base path (without suffix), e.g.
+        ``.../eddy-out/c01_ses-T0_dwi_den_grc_tec_preproc-2``.
+    dwi_path, noise_path, residuals_path, bval_path, mask_path : optional paths
+        for image-based metrics.
+    """
+    row: dict[str, float | str] = {"subject": subject_id}
+
+    # --- motion (eddy_movement_rms) ---
+    mrms = _safe(load_movement_rms, _eddy_path(eddy_base, "movement_rms"))
+    if mrms is not None:
+        row["mot_abs_mm_mean"] = float(mrms["abs_mm"].mean())
+        row["mot_rel_mm_mean"] = float(mrms["rel_mm"].mean())
+        row["mot_rel_mm_max"] = float(mrms["rel_mm"].max())
+
+    # --- outliers (eddy_outlier_map) ---
+    omap = _safe(load_outlier_map, _eddy_path(eddy_base, "outlier_map"))
+    if omap is not None:
+        row.update(summarize_outliers(omap).to_dict())
+
+    # --- eddy_quad metrics (qc.json) ---
+    qc = _safe(load_qc_json, _eddy_path(eddy_base, "qc_json"))
+    if qc is not None:
+        row.update(qc_json_to_series(qc).to_dict())
+
+    # --- denoising SNR (optional, requires images) ---
+    if dwi_path and noise_path and bval_path:
+        snr = _safe(compute_denoising_snr, dwi_path, noise_path, bval_path,
+                    mask_path=mask_path, b0_thr=b0_thr)
+        if snr is not None:
+            row.update(snr.to_dict())
+
+    # --- residual statistics (optional) ---
+    if residuals_path:
+        rst = _safe(compute_residual_stats, residuals_path, mask_path=mask_path)
+        if rst is not None:
+            row.update(rst.to_dict())
+
+    return pd.DataFrame([row]).set_index("subject")
+
+
+def cohort_qc_summary(subjects: list[dict]) -> pd.DataFrame:
+    """Apply :func:`subject_qc_summary` to a list of subjects and stack rows.
+
+    Each item in ``subjects`` is a dict with the keys accepted by
+    :func:`subject_qc_summary` (at least ``subject_id`` and ``eddy_base``).
+    Returns one subject per row, suitable for CSV export.
+    """
+    frames = []
+    for spec in subjects:
+        spec = dict(spec)
+        sid = spec.pop("subject_id")
+        eddy_base = spec.pop("eddy_base")
+        frames.append(subject_qc_summary(sid, eddy_base, **spec))
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, axis=0)
