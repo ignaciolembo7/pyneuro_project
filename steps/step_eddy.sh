@@ -16,6 +16,24 @@ source "${here}/preproc_config.sh"
 load_fsl
 thr="${BET_THR}"
 
+if [ -n "${EDDY_CMD:-}" ]; then
+  if ! command -v "${EDDY_CMD}" >/dev/null 2>&1; then
+    echo "Requested EDDY_CMD not found in PATH: ${EDDY_CMD}" >&2
+    exit 1
+  fi
+else
+  for candidate in eddy_openmp eddy_cpu eddy; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      EDDY_CMD="${candidate}"
+      break
+    fi
+  done
+  if [ -z "${EDDY_CMD:-}" ]; then
+    echo "Missing FSL eddy executable: tried eddy_openmp, eddy_cpu, eddy" >&2
+    exit 1
+  fi
+fi
+
 dwidir="${BASEPATH}/${sub}/${SESSION}/dwi"
 dendir="${dwidir}/den"
 mkdir -p "${dendir}/preproc-2/eddy-in" "${dendir}/preproc-2/eddy-out"
@@ -49,9 +67,9 @@ myslspec="${dendir}/preproc-2/eddy-in/${sub}_my_slspec.txt"
 python "${PREPROC_SCRIPTS_DIR}/make_slspec.py" --json "${myjson}" --out "${myslspec}"
 
 # ---------------- original commands (unchanged) ----------------
-eddy_openmp --imain=${myimain} --mask=${mymask} --acqp=${myacqp} --index=${findex} \
+"${EDDY_CMD}" --imain=${myimain} --mask=${mymask} --acqp=${myacqp} --index=${findex} \
   --bvecs=${mybvecs} --bvals=${mybvals} --topup=${mytopup} --out=${myout} \
-  --repol --ol_type=both --slspec=${myslspec} --cnr_maps --residuals
+  --repol --ol_type=both --slspec=${myslspec} --cnr_maps --residuals ${EDDY_EXTRA_ARGS:-}
 
 cd "${dendir}/preproc-2/eddy-out"
 eddy_quad ${myout} -idx ${findex} -par ${myacqp} -m ${mymask} -b ${mybvals} -s ${myslspec}
